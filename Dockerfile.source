@@ -1,0 +1,56 @@
+# Builds the MinIO server from this checkout's source. Upstream's Dockerfiles
+# only repackage prebuilt binaries from dl.min.io, which no longer gets
+# community releases.
+#
+#   podman build -f Dockerfile.source \
+#     --build-arg MINIO_VERSION=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ) \
+#     --build-arg MINIO_COMMIT=$(git rev-parse HEAD) \
+#     -t ghcr.io/ahmadmeselmani/minio:dev .
+
+FROM golang:1.24-alpine AS build
+
+# Commit time of the source, as YYYY-MM-DDTHH:MM:SSZ (UTC), and its full hash.
+# They feed the same -X variables buildscripts/gen-ldflags.go sets.
+ARG MINIO_VERSION
+ARG MINIO_COMMIT
+
+ENV CGO_ENABLED=0 GOTOOLCHAIN=auto
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN test -n "$MINIO_VERSION" && test -n "$MINIO_COMMIT" || \
+      { echo "MINIO_VERSION and MINIO_COMMIT build args are required" >&2; exit 1; }; \
+    TAG="RELEASE.$(echo "$MINIO_VERSION" | tr ':' '-')"; \
+    YEAR="$(echo "$MINIO_VERSION" | cut -c1-4)"; \
+    SHORT="$(echo "$MINIO_COMMIT" | cut -c1-12)"; \
+    go build -tags kqueue -trimpath -o /out/minio -ldflags "-s -w \
+      -X github.com/minio/minio/cmd.Version=$MINIO_VERSION \
+      -X github.com/minio/minio/cmd.CopyrightYear=$YEAR \
+      -X github.com/minio/minio/cmd.ReleaseTag=$TAG \
+      -X github.com/minio/minio/cmd.CommitID=$MINIO_COMMIT \
+      -X github.com/minio/minio/cmd.ShortCommitID=$SHORT" .
+
+FROM alpine:3.22
+
+# curl serves container healthchecks (/minio/health/live).
+RUN apk add --no-cache ca-certificates curl
+
+COPY --from=build /out/minio /usr/bin/minio
+COPY dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+COPY LICENSE CREDITS /licenses/
+
+ENV MINIO_ACCESS_KEY_FILE=access_key \
+    MINIO_SECRET_KEY_FILE=secret_key \
+    MINIO_ROOT_USER_FILE=access_key \
+    MINIO_ROOT_PASSWORD_FILE=secret_key \
+    MINIO_KMS_SECRET_KEY_FILE=kms_master_key \
+    MINIO_CONFIG_ENV_FILE=config.env
+
+EXPOSE 9000 9001
+VOLUME ["/data"]
+
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
+CMD ["minio", "server", "/data"]
