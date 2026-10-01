@@ -1,14 +1,17 @@
 name: Source image
 
 # Builds Dockerfile.source and publishes it to ghcr.io/<owner>/minio.
+# Manual only: Actions → Source image → Run workflow, on any branch or tag.
 # Tags: RELEASE.<commit time> and sha-<short commit> for every build, plus
-# latest from master. Runs on demand or when a RELEASE.* tag is pushed.
+# latest when the run asks for it.
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "RELEASE.*"
+    inputs:
+      latest:
+        description: Also tag this build as latest
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -50,7 +53,7 @@ jobs:
           tags: |
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.release }}
             ${{ steps.version.outputs.image }}:sha-${{ steps.version.outputs.short }}
-            ${{ github.ref == 'refs/heads/master' && format('{0}:latest', steps.version.outputs.image) || '' }}
+            ${{ inputs.latest && format('{0}:latest', steps.version.outputs.image) || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
